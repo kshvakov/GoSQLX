@@ -1,0 +1,1 @@
+- **Parser**: SELECT now accepts the PostgreSQL clause order `SELECT ... ORDER BY x FOR UPDATE SKIP LOCKED LIMIT n` — LIMIT / OFFSET after the locking clause. The SQL-standard order `LIMIT ... FOR UPDATE` was already accepted; a repeated LIMIT / OFFSET after either order is still rejected, matching PostgreSQL's own grammar (verified against libpg_query).

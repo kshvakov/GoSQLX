@@ -275,3 +275,92 @@ func TestNoForClause(t *testing.T) {
 		t.Error("expected For clause to be nil for query without FOR clause")
 	}
 }
+
+// TestForUpdateAfterLimit tests the PostgreSQL clause order where the
+// locking clause precedes LIMIT / OFFSET (SELECT ... ORDER BY x FOR
+// UPDATE SKIP LOCKED LIMIT n), the shape libpg_query accepts. The
+// standard order LIMIT ... FOR UPDATE is covered above.
+func TestForUpdateAfterLimit(t *testing.T) {
+	tests := []struct {
+		name   string
+		sql    string
+		limit  int
+		offset int
+	}{
+		{
+			name:  "FOR UPDATE then LIMIT",
+			sql:   "SELECT id FROM t ORDER BY x FOR UPDATE LIMIT 100",
+			limit: 100,
+		},
+		{
+			name:  "FOR UPDATE SKIP LOCKED then LIMIT",
+			sql:   "SELECT id FROM jobs ORDER BY priority FOR UPDATE SKIP LOCKED LIMIT 100",
+			limit: 100,
+		},
+		{
+			name:  "FOR SHARE NOWAIT then LIMIT",
+			sql:   "SELECT id FROM t FOR SHARE NOWAIT LIMIT 1",
+			limit: 1,
+		},
+		{
+			name:   "FOR UPDATE OF then LIMIT OFFSET",
+			sql:    "SELECT id FROM t FOR UPDATE OF t SKIP LOCKED LIMIT 100 OFFSET 5",
+			limit:  100,
+			offset: 5,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stmt := parseSQL(t, tt.sql)
+
+			if stmt == nil || len(stmt.Statements) == 0 {
+				t.Fatal("expected statement")
+			}
+
+			selectStmt, ok := stmt.Statements[0].(*ast.SelectStatement)
+			if !ok {
+				t.Fatalf("expected SelectStatement, got %T", stmt.Statements[0])
+			}
+
+			if selectStmt.For == nil {
+				t.Fatal("expected For clause, got nil")
+			}
+
+			if selectStmt.Limit == nil {
+				t.Fatalf("expected LIMIT %d, got none", tt.limit)
+			}
+
+			if *selectStmt.Limit != tt.limit {
+				t.Fatalf("LIMIT = %d, want %d", *selectStmt.Limit, tt.limit)
+			}
+
+			if tt.offset == 0 {
+				if selectStmt.Offset != nil {
+					t.Fatalf("unexpected OFFSET %d", *selectStmt.Offset)
+				}
+				return
+			}
+			if selectStmt.Offset == nil || *selectStmt.Offset != tt.offset {
+				t.Fatalf("OFFSET = %+v, want %d", selectStmt.Offset, tt.offset)
+			}
+		})
+	}
+}
+
+// TestForUpdateAfterLimitErrors pins that LIMIT / OFFSET after a locking
+// clause cannot be repeated: the second clause is rejected, matching
+// PostgreSQL's own grammar.
+func TestForUpdateAfterLimitErrors(t *testing.T) {
+	for _, sql := range []string{
+		"SELECT id FROM t LIMIT 5 LIMIT 10",
+		"SELECT id FROM t FOR UPDATE LIMIT 5 LIMIT 10",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			_, err := parseSQLMayFail(t, sql)
+			if err == nil {
+				t.Fatalf("parse(%q): expected error for repeated LIMIT, got none", sql)
+			}
+		})
+	}
+}

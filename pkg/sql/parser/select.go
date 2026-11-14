@@ -345,6 +345,16 @@ func (p *Parser) parseSelectStatement() (ast.Statement, error) {
 		}
 	}
 
+	// PostgreSQL accepts LIMIT / OFFSET after the locking clause
+	// (SELECT ... ORDER BY x FOR UPDATE SKIP LOCKED LIMIT 10), while the
+	// SQL-standard order LIMIT ... FOR UPDATE is parsed above. A second
+	// locking clause after LIMIT is invalid, so no loop is needed.
+	if selectStmt.For != nil && (p.isType(models.TokenTypeLimit) || p.isType(models.TokenTypeOffset)) {
+		if err = p.parseLimitOffsetInto(selectStmt); err != nil {
+			return nil, err
+		}
+	}
+
 	// MySQL 8: INTO after the locking clause
 	if !hasSelectInto(selectStmt) && selectStmt.For != nil && p.isMySQLFamily() && p.isType(models.TokenTypeInto) {
 		if err = p.parseTrailingSelectInto(selectStmt); err != nil {
